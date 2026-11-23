@@ -74,7 +74,7 @@ export function compareReports(baseline, candidate) {
  return {scenarios:candidate.rows.length,approvedDifferences:differences};
 }
 
-/** Reproduce #108's four breaks in ten state/task transitions; keep safety resets. */
+/** Ten state/task transitions: every one extends the previous request; no reset. */
 export function investigateCache() {
  let goal=createGoal({objective:'Complete three verified tasks',autoContinue:true,sisyphus:false},0);
  goal.id='cache-investigation';
@@ -89,11 +89,14 @@ export function investigateCache() {
   const next=retention.apply('state-workflow',history,goalPromptParts(goal)).messages;
   let shared=0;while(shared<previous.length && JSON.stringify(previous[shared])===JSON.stringify(next[shared]))shared++;
   const prefixBreak=shared!==previous.length;
-  assert.equal(prefixBreak,kind!=='work',`${kind}: unexplained reset/reuse`);
+  // #108 demanded that a state change stop resetting the whole prefix. A changed
+  // state now appends a superseding block at the tail, so every transition —
+  // including the pure work steps — must reuse the entire previous request.
+  assert.equal(prefixBreak,false,`${kind}: unexplained reset`);
   stateChanges.push({kind,prefixBreak,reusableBlocks:shared,reusableBytes:Buffer.byteLength(JSON.stringify(previous.slice(0,shared))),requestBytes:Buffer.byteLength(JSON.stringify(next))});
   previous=next;
  }
- assert.equal(stateChanges.filter(step=>step.prefixBreak).length,4);
+ assert.equal(stateChanges.filter(step=>step.prefixBreak).length,0);
  const occupancy=[];
  for(const showContextUsage of [true,false]) {
   const retained=new LiveTailRetention();
@@ -108,6 +111,6 @@ export function investigateCache() {
   }
   occupancy.push({showContextUsage,requests:80,breaks,appendedCounters,totalRequestBytes});
  }
- return {stateChanges,occupancy,decision:'retain policy resets; task progress changes active task instructions and completion gates'};
+ return {stateChanges,occupancy,decision:'append superseding state blocks; task progress changes active task instructions and completion gates without resetting the prefix'};
 }
 

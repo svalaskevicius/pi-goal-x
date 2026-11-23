@@ -830,7 +830,7 @@ test("prompt cache: normal and custom runs preserve history while refreshing all
   history.push({role: "custom", customType: "pi-goal-event", content: "legacy full prompt", details: {goalId: h.core.state.goal!.id, kind: "checkpoint"}, timestamp: i + 4});
   const current = await request();
   assert.deepEqual(current.slice(0, third.length - 1), third.slice(0, -1));
-  assert.equal(current.filter((m: any) => m.customType === "pi-goal-live-context").length, 7, "retained tails are re-sent in place, never duplicated per request");
+  assert.equal(current.filter((m: any) => m.customType === "pi-goal-live-context").length, 5, "retained tails are re-sent in place, never duplicated per request");
   const before = current.slice(0, -1);
   const again = await request();
   assert.deepEqual(again.slice(0, -1), before);

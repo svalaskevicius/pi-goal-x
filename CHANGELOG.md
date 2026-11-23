@@ -4,6 +4,10 @@ All notable changes to pi-goal-x are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep the provider prompt prefix intact when a goal leaves active state. Pausing with Escape dropped the per-turn counters block and cleared every retained request-only tail, so the next request resent the whole context instead of extending the cached prefix.
+
 ## [0.34.1] — 2026-10-27
 
 Includes #118.

@@ -135,7 +135,7 @@ test("the registered settings menu edits and resets context display in both scop
  }
 });
 
-test("changing and removing budget or run limits clears historical policy", () => {
+test("changing and removing budget or run limits supersedes historical policy", () => {
 	const goal = createGoal({ objective: "Continue work", autoContinue: true, sisyphus: false });
 	goal.tokenBudget = 100;
 	goal.usage.tokensUsed = 20;
@@ -145,8 +145,15 @@ test("changing and removing budget or run limits clears historical policy", () =
 	delete goal.tokenBudget;
 	const parts = goalPromptParts(goal, {}, { tokens: 20, contextWindow: 1000 });
 	const out = retention.apply("s", [...base, { role: "assistant", content: "work" }], parts);
-	assert.equal(out.transientContents.length, 2);
-	assert.match(out.transientContents[0]!, /Limits: lifetime tokens=none; runs=unlimited/);
-	assert.doesNotMatch(out.transientContents.join("\n"), /tokens=100|runs=10/);
+	// The superseded policy block stays on the wire for prefix stability, so the
+	// removed limits must be absent from the authoritative block, which declares
+	// that it supersedes every earlier one.
+	const policies = out.transientContents.filter(text => text.includes("Limits: lifetime tokens="));
+	assert.equal(policies.length, 2);
+	assert.match(policies[0]!, /Limits: lifetime tokens=100; runs=10/);
+	const latest = policies.at(-1)!;
+	assert.match(latest, /supersedes every earlier PI GOAL block/);
+	assert.match(latest, /Limits: lifetime tokens=none; runs=unlimited/);
+	assert.doesNotMatch(latest, /tokens=100|runs=10/);
 	assert.match(modelBudgetLine({ tokenBudget: 1, usage: { tokensUsed: 2 } })!, /spending cap, not context capacity/);
 });

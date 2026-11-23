@@ -178,7 +178,14 @@ for (const flavor of ["openai-completions", "openai-responses"] as const) {
 			// Policy edits and compaction reset retained state, while host/tools stay stable.
 			const nextState = "[PI GOAL ACTIVE goalId=fixture]\nObjective: revised";
 			const edited = await capture(session, {state: nextState, counters: "Usage: 800 tokens"});
-			assert.ok(!JSON.stringify(conversation(edited)).includes("Objective: hold the line"));
+			// A policy edit appends a superseding block instead of resetting, so the
+			// superseded objective stays on the wire: the newest block must be the
+			// last one, must declare itself authoritative, and must be the only copy
+			// of the new policy.
+			const editedText = JSON.stringify(conversation(edited));
+			assert.equal(editedText.split("Objective: revised").length - 1, 1, "exactly one copy of the new policy");
+			assert.ok(editedText.includes("supersedes every earlier PI GOAL block"), "the appended block supersedes the retained one");
+			assert.ok(editedText.indexOf("Objective: revised") > editedText.indexOf("Objective: hold the line"), "the newest policy block is the last on the wire");
 			session.splice(0, session.length, {role: "user", content: "Compacted summary", timestamp: 11});
 			for (let n = 0; n < 40; n++) {
 				const fresh = {state: nextState, counters: `Goal snapshot: ${900 + n} tokens`};

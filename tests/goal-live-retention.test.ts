@@ -194,12 +194,32 @@ test("a delayed result resets earlier policy as well as the unsafe counter ancho
  assert.deepEqual(retention.contents("s"), ["S", "V3"]);
 });
 
-test("removing optional observations does not replay their old values", () => {
+test("dropping the counters block keeps the wire a literal prefix", () => {
  const retention = new LiveTailRetention();
  const base = [msg("user", "inspect", 1)];
- retention.apply("s", base, {state: "S", counters: "obsolete occupancy"});
+ const active = retention.apply("s", base, {state: "S", counters: "obsolete occupancy"});
  const out = retention.apply("s", base, {state: "S"});
- assert.deepEqual(contents(out.messages), ["inspect", "S"]);
+ assert.deepEqual(contents(out.messages), ["inspect", "S", "obsolete occupancy"], "the superseded counters block stays at its anchor");
+ assert.deepEqual(out.messages.slice(0, active.messages.length), active.messages, "removing the block costs no cached prefix");
+ assert.deepEqual(retention.apply("s", base, {state: "S"}).messages, out.messages, "an unchanged repeat appends nothing");
+});
+
+const SUPERSEDE = "[PI GOAL STATE UPDATE: supersedes every earlier PI GOAL block]";
+
+test("dropping counters on pause preserves the whole retained prefix", () => {
+	const retention = new LiveTailRetention();
+	const base: any[] = [msg("user", "h", 1), msg("assistant", "a", 2)];
+	const active = retention.apply("s", base, { state: "ACTIVE POLICY", counters: "V1" });
+	assert.deepEqual(contents(active.messages), ["h", "a", "ACTIVE POLICY", "V1"]);
+	base.push(msg("user", "next", 3));
+	// Pausing keeps a goal block but drops the per-turn counters.
+	const paused = retention.apply("s", base, { state: "PAUSED" });
+	assert.deepEqual(contents(paused.messages), ["h", "a", "ACTIVE POLICY", "V1", "next", `${SUPERSEDE}\nPAUSED`]);
+	assert.deepEqual(paused.messages.slice(0, active.messages.length), active.messages, "the previous request is a full prefix");
+	assert.deepEqual(paused.transientContents, ["ACTIVE POLICY", "V1", `${SUPERSEDE}\nPAUSED`], "every wire block is transient");
+	const resumed = retention.apply("s", [...base, msg("assistant", "r", 4)], { state: "ACTIVE POLICY", counters: "V2" });
+	assert.deepEqual(contents(resumed.messages), ["h", "a", "ACTIVE POLICY", "V1", "next", `${SUPERSEDE}\nPAUSED`, "r", `${SUPERSEDE}\nACTIVE POLICY`, "V2"]);
+	assert.deepEqual(resumed.messages.slice(0, paused.messages.length), paused.messages, "resuming extends the paused request");
 });
 
 test("image and large tool-output edits invalidate hashes without changing stored history", () => {

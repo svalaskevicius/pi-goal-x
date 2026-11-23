@@ -18,9 +18,13 @@ import { asRecord } from "./goal-record.ts";
  * content across repeated requests appends nothing, so tool loops and idle
  * re-requests cost zero growth. History rewrites (compaction, resume,
  * session-tree moves, filter changes, middle-message edits), unsafe insertion
- * points, and overflow perform one documented full reset. A changed goal
- * state is appended with an explicit supersession marker so the old thinking
- * signatures and cached prefix remain valid while the newest state wins.
+ * points, and overflow perform one documented full reset. A changed goal state
+ * is appended with an explicit supersession marker so the old thinking
+ * signatures and cached prefix remain valid while the newest state wins. A
+ * lifecycle transition that drops the optional counters block keeps every
+ * retained tail: removing a mid-history block truncates the cached prefix at
+ * its anchor, and the superseding state block already marks older numbers as
+ * non-authoritative.
  */
 
 export const LIVE_CONTEXT_TYPE = "pi-goal-live-context";
@@ -64,7 +68,6 @@ interface RetainedTail {
 interface SessionRetention {
 	tails: RetainedTail[];
 	lastFresh: FreshLiveTails | undefined;
-	lastBlocks: string[];
 	/** Digest of every base message at the last apply; any earlier rewrite resets. */
 	baseFingerprints: Array<string | null>;
 }
@@ -134,7 +137,7 @@ export class LiveTailRetention {
 		const fingerprints = base.map(fingerprintMessage);
 		let session = this.sessions.get(sessionKey);
 		if (!session) {
-			session = { tails: [], lastFresh: undefined, lastBlocks: [], baseFingerprints: [] };
+			session = { tails: [], lastFresh: undefined, baseFingerprints: [] };
 			if (this.sessions.size >= MAX_TRACKED_SESSIONS) {
 				const oldest = this.sessions.keys().next();
 				if (!oldest.done) this.sessions.delete(oldest.value);
@@ -144,16 +147,20 @@ export class LiveTailRetention {
 		const reset = () => {
 			session!.tails = [];
 			session!.lastFresh = undefined;
-			session!.lastBlocks = [];
 			session!.baseFingerprints = [];
 		};
 		// State changes are retained in place and the new state block carries a
 		// supersession header. This keeps earlier thinking signatures valid while
 		// telling the model that the newest snapshot is authoritative.
-		// Removing the optional counters is different: retaining the old counter
-		// would reintroduce an observation that the latest snapshot intentionally
-		// omitted, so clear that historical tail.
-		if (session.lastFresh !== undefined && session.lastFresh.counters !== undefined && fresh.counters === undefined) reset();
+		// A lifecycle transition also drops the optional counters block: leaving
+		// active goal state is the only way that block disappears. It gets no reset.
+		// Every tail replays at a mid-history anchor, so removing any of them
+		// truncates the cached prefix at the earliest anchor — pausing on Esc used to
+		// cost a full context resend. Retain them: the counters carry no instruction
+		// (scheduling text rides the state block, which is superseded), they are
+		// plain usage numbers, and the state block already states that the latest
+		// snapshot supersedes earlier snapshots. The retained tail and counter-byte
+		// bounds still cap what that stability costs.
 		// Tails anchored while history was empty would linger at the head once
 		// real history arrives. Reset once so fresh tails anchor at the tail.
 		if (session.tails.length > 0 && session.baseFingerprints.length === 0 && base.length > 0) reset();
@@ -186,12 +193,14 @@ export class LiveTailRetention {
 		if (valid < session.tails.length) reset();
 		const stateChanged = session.lastFresh !== undefined && session.lastFresh.state !== fresh.state;
 		const blocks = freshBlocks(fresh, stateChanged);
-		// Append only the suffix that differs from the last emitted tails, so
+		// Skip the blocks the previous request already put on the wire, so
 		// unchanged content across repeats, tool loops, and history advances
-		// adds zero blocks while keeping the prefix literal.
-		const previous = session.lastBlocks;
-		let shared = 0;
-		while (shared < blocks.length && shared < previous.length && blocks[shared] === previous[shared]) shared++;
+		// adds zero blocks while keeping the prefix literal. Compare the underlying
+		// state, not the emitted text: a superseded state block carries a header
+		// the recomputed block does not, so a text comparison re-appends the
+		// identical state on the request right after any state change.
+		const stateRetained = session.lastFresh?.state === fresh.state;
+		let shared = Math.min(stateRetained && session.lastFresh?.counters === fresh.counters ? 2 : stateRetained ? 1 : 0, blocks.length);
 		// Overflow is measured against what this request actually appends: an
 		// unchanged request adds nothing and must never trigger a reset.
 		if (session.tails.length + (blocks.length - shared) > MAX_RETAINED_LIVE_TAILS
@@ -213,7 +222,6 @@ export class LiveTailRetention {
 		}
 		session.baseFingerprints = fingerprints;
 		session.lastFresh = { state: fresh.state, counters: fresh.counters };
-		session.lastBlocks = blocks;
 		return { messages, transientContents: [...new Set([...session.tails.map(tail => tail.content), ...blocks])] };
 	}
 

@@ -1,5 +1,14 @@
 # Implementation log
 
+## 2026-11-05: pause cleared the retained prefix
+
+- User report: cancelling a goal with Escape made the next request reload the whole context. Reproduced in `LiveTailRetention`: leaving active goal state is the only way the optional counters block disappears, and that transition called a full retention reset. Retained tails replay at mid-history anchors, so clearing them truncated the reusable prefix at the earliest anchor — measured 1 of 36 wire blocks after a pause at e5111cb.
+- First attempt pruned only the counter tails. It improved the pause request to a break at the first counter anchor, which is still early in the wire: counters are appended at the end of each request, so their anchors spread across the session. Not a fix.
+- Final behaviour retains every tail when the counters block is dropped. The counters carry no instruction — scheduling text rides the state block, which is superseded with an explicit header — and the state block already states that the latest snapshot supersedes earlier snapshots, so the older numbers are non-authoritative. Retained tail and counter-byte bounds still cap the cost. Measured 36 of 36 blocks reused after the same pause.
+- Fixed a second defect found while checking pause idempotency: the suffix-sharing comparison compared emitted block text, and a superseded state block carries a header the recomputed block does not. The request after any state change therefore re-appended the identical state block. Sharing now compares the underlying state and counters against the previous snapshot.
+- Three gates were left red by the supersession change and encoded the older clear-on-change contract: the #108 state-change gate asserted four prefix breaks over ten transitions, the budget/run-limit gate asserted that removed limits vanish from the wire, and the real-SDK prefix worker asserted the superseded objective disappears. Updated all three to the supersession contract: zero prefix breaks, the authoritative block is the last one and carries no removed limit, and the new policy appears exactly once. The SDK worker's retained-counter expectation moved from 7 live blocks to 5.
+- Validation: `npx tsc --noEmit` and eslint clean. 1,238 unit, 31 integration and 34 e2e tests pass; the same three unit failures and one e2e failure reproduce on untouched HEAD. `experiments/context/cache-report.mjs` builds 408 adapter scenarios with 32 resets over 1,000 bounded transitions, inside the gate bounds. No paid provider requests; live cache-hit rates were not measured.
+
 ## 2026-11-04: issue #126 stable tool profiles
 
 - Posted the approved investigation comment without changing its draft: https://github.com/tmonk/pi-goal-x/issues/126#issuecomment-6642948025. The earlier status/focus stability claims below describe the original design; issue #126 exposed later lifecycle gating in applicableGoalTools.
